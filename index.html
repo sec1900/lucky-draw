@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>单屏抽奖（数字方块）</title>
+  <style>
+    :root {
+      --cell-size: 72px; /* 将通过 JS 动态调整以适配单屏 */
+      --accent: #ff4d6d; /* 主题色 */
+      --bg: #f7faff;     /* 深色背景，显眼 */
+      --panel: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --success: #10b981;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      background: radial-gradient(1400px 700px at 70% -20%, #ffffff 0%, #ffe8f1 35%, var(--bg) 65%) fixed;
+      color: var(--text);
+      overflow: hidden; /* 关键：禁止页面滚动，确保单屏 */
+    }
+
+    /* 隐藏但可被辅助功能读取 */
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+    /* 顶部控制条 */
+    .topbar {
+      display: grid;
+      grid-template-columns: 1fr auto auto auto auto;
+      gap: 12px;
+      align-items: center;
+      padding: 14px 16px 10px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+      border-bottom: 1px solid rgba(0,0,0,0.08);
+    }
+    .title {
+      font-weight: 700;
+      letter-spacing: .5px;
+      font-size: 16px;
+      color: #374151;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .title small { color: var(--muted); font-weight: 500; }
+
+    .controls {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: nowrap;
+    }
+
+    .input {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--panel);
+      border: 1px solid rgba(0,0,0,0.08);
+      border-radius: 12px;
+      padding: 8px 10px;
+      height: 40px;
+    }
+    .input label { font-size: 12px; color: var(--muted); }
+    .input input {
+      width: 80px;
+      border: none;
+      outline: none;
+      background: transparent;
+      color: var(--text);
+      font-size: 14px;
+      text-align: center;
+    }
+
+    .btn {
+      appearance: none;
+      border: 1px solid rgba(0,0,0,0.12);
+      border-radius: 12px;
+      background: #ffffff;
+      color: #1f2937;
+      padding: 10px 14px;
+      height: 40px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform .06s ease, box-shadow .2s ease, background .2s ease, opacity .2s ease;
+      box-shadow: inset 0 -2px 0 rgba(255,255,255,0), 0 3px 10px rgba(0,0,0,0.08);
+      user-select: none;
+    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn:active { transform: translateY(0px) scale(.98); }
+    .btn[disabled] { opacity: .45; cursor: not-allowed; }
+    .btn.primary { background: linear-gradient(180deg, #60a5fa, #2563eb); border-color: rgba(96,165,250,0.75); }
+    .btn.success { background: linear-gradient(180deg, #34d399, #059669); border-color: rgba(52,211,153,0.7); }
+    .btn.warn { background: linear-gradient(180deg, #fbbf24, #f59e0b); border-color: rgba(251,191,36,0.7); }
+    .btn.outline { background: transparent; }
+
+    /* 内容区：上方为“已中奖”条，下面是网格 */
+    .content {
+      height: calc(100vh - 66px); /* 减去 topbar 高度（约 66px） */
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .winners-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px 6px;
+      overflow: hidden; /* 仍保持单屏不滚动 */
+    }
+    .winners-bar .label { color: var(--muted); font-size: 12px; }
+    .chips {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      align-items: center;
+      max-height: 56px; /* 控制高度，避免挤压过度 */
+    }
+    .chip {
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(16,185,129,0.12);
+      color: #9af6d3;
+      border: 1px solid rgba(16,185,129,0.35);
+      font-weight: 700;
+      font-feature-settings: "tnum";
+    }
+
+    /* 网格容器（使用弹性布局 + 固定方块尺寸，JS 计算以适配单屏） */
+    .grid {
+      position: relative;
+      padding: 10px 12px 16px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-content: flex-start;
+      gap: 8px; /* 方块间距 */
+      overflow: hidden; /* 不允许滚动 */
+    }
+
+    .cell {
+      width: var(--cell-size);
+      height: var(--cell-size);
+      border-radius: 16px;
+      border: 2px solid rgba(0,0,0,0.12);
+      background: linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0.06));
+      box-shadow: 0 4px 12px rgba(0,0,0,0.12), inset 0 0 0 1px rgba(255,255,255,0.04);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      letter-spacing: .5px;
+      user-select: none;
+      font-size: calc(var(--cell-size) * var(--num-scale, 0.62));
+      line-height: 1;
+      transition: transform .12s ease, border-color .2s ease, background .2s ease, filter .2s ease, opacity .2s ease;
+      position: relative;
+    }
+    .cell:hover { transform: translateY(-2px); }
+
+    .cell.drawn { background: linear-gradient(180deg, rgba(0,0,0,0.03), rgba(0,0,0,0.01)); border-color: rgba(0,0,0,0.06); color: #9ca3af; text-decoration: line-through; opacity: .65; }
+
+    @keyframes flash { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(2.2); } }
+    .cell.highlight { border-color: var(--accent); animation: flash .3s linear infinite; box-shadow: 0 0 0 8px rgba(255,77,109,0.28), 0 0 50px rgba(255,77,109,0.55), 0 0 100px rgba(255,199,95,0.45); transform: scale(1.16); background: linear-gradient(180deg, rgba(255,255,255,0.60), rgba(255,255,255,0.20)); }
+
+    /* 聚焦放大层（等待确认） */
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(3,6,23,0.72);
+      display: none; /* 使用 .show 控制显示 */
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
+      backdrop-filter: blur(2px);
+    }
+    .overlay.show { display: flex; }
+
+    .spotlight {
+      display: grid;
+      grid-template-rows: 1fr auto;
+      gap: 18px;
+      align-items: center;
+      justify-items: center;
+    }
+    $1$2}
+    @keyframes pop { to { transform: scale(1); } }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 8px 30px rgba(88,98,251,0.55), inset 0 0 0 2px rgba(255,255,255,0.08); }
+      50% { box-shadow: 0 12px 60px rgba(88,98,251,0.85), inset 0 0 0 2px rgba(255,255,255,0.12); }
+    }
+
+    .spotlight-actions { display: flex; gap: 10px; }
+
+    .roller { position: fixed; left: 50%; top: 86px; transform: translateX(-50%); background: linear-gradient(180deg, #ff8fab, #ff4d6d); border: 3px solid var(--accent); border-radius: 22px; padding: 10px 22px; font-weight: 900; font-size: clamp(80px, 18vw, 220px); letter-spacing: 1.4px; color: #ffffff; box-shadow: 0 16px 40px rgba(0,0,0,0.16), 0 0 0 8px rgba(255,77,109,0.16); display: none; z-index: 120; }
+    .roller.show { display: block; animation: pulse 1.8s ease-in-out infinite; }  
+    
+
+    /* 轻量提示 */
+    .hint { color: var(--muted); font-size: 12px; padding: 0 16px 6px; }
+    .error { color: #ffb4c0; font-size: 12px; padding-left: 8px; }
+
+    /* 让按钮与输入在小屏也不拥挤 */
+    @media (max-width: 880px) {
+      .topbar { grid-template-columns: 1fr; row-gap: 10px; }
+      .content { height: calc(100vh - 126px); }
+      .controls { flex-wrap: wrap; }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="title">🎲 抽奖（数字方块）<small>单屏显示 · 闪烁动画 · 确认去重</small></div>
+    <div class="controls">
+      <div class="input"><label for="start">开始</label><input id="start" type="number" value="1" /></div>
+      <div class="input"><label for="end">结束</label><input id="end" type="number" value="30" /></div>
+      <button id="gen" class="btn">生成号码</button>
+      <button id="draw" class="btn primary">开始抽奖</button>
+      <button id="reset" class="btn outline">重置</button>
+    </div>
+  </div>
+
+  <div class="content">
+    <div class="winners-bar">
+      <span class="label">已中奖：</span>
+      <div id="winners" class="chips"></div>
+    </div>
+    <div class="hint">提示：点击“生成号码”后开始抽奖。抽中后会弹出放大确认框，确认后本号不再参与下一轮。</div>
+    <div id="roller" class="roller" role="status" aria-live="assertive"></div>
+    <div id="grid" class="grid" aria-live="polite"></div>
+  </div>
+
+  <!-- 中奖放大确认层 -->
+  <div id="overlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
+    <span id="dlgTitle" class="sr-only">中奖确认</span>
+    <div class="spotlight">
+      <div id="dlgNumber" class="spotlight-number" aria-label="中奖号码"></div>
+      <div class="spotlight-actions">
+        <button id="confirm" class="btn success">确认记录</button>
+        <button id="cancel" class="btn warn">取消本次</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function(){
+      const startInput = document.getElementById('start');
+      const endInput   = document.getElementById('end');
+      const genBtn     = document.getElementById('gen');
+      const drawBtn    = document.getElementById('draw');
+      const resetBtn   = document.getElementById('reset');
+
+      const gridEl     = document.getElementById('grid');
+      const winnersEl  = document.getElementById('winners');
+      const rollerEl   = document.getElementById('roller');
+
+      const overlay    = document.getElementById('overlay');
+      const dlgNumber  = document.getElementById('dlgNumber');
+      const confirmBtn = document.getElementById('confirm');
+      const cancelBtn  = document.getElementById('cancel');
+
+      let allNumbers = [];          // 全部号码（含已中奖）
+      let drawnSet   = new Set();   // 已确认的中奖号码
+      let animTimer  = null;        // 高亮闪烁定时器
+      let animActiveCell = null;    // 当前闪烁的 cell
+      let currentWinner = null;     // 当前等待确认的中奖号码
+
+      /** 将 [s,e] 转换为数组（可单测） */
+      function buildRange(s, e){
+        return Array.from({ length: e - s + 1 }, (_, i) => s + i);
+      }
+
+      /** 从数组中随机返回一个元素（可单测） */
+      function chooseRandom(arr){
+        if (!arr || arr.length === 0) return undefined;
+        return arr[Math.floor(Math.random() * arr.length)];
+      }
+
+      /** 生成号码方块 **/
+      function generateNumbers(){
+        const s = parseInt(startInput.value, 10);
+        const e = parseInt(endInput.value, 10);
+        if (Number.isNaN(s) || Number.isNaN(e)) return info("请输入有效数字范围。");
+        if (e < s) { info("结束数字必须 ≥ 开始数字。"); return; }
+        const count = e - s + 1;
+        if (count <= 0) { info("数字范围不能为空。"); return; }
+        // 重置状态
+        allNumbers = buildRange(s, e);
+        drawnSet.clear();
+        currentWinner = null;
+        stopAnim();
+        winnersEl.innerHTML = '';
+        renderGrid();
+        info(`已生成 ${count} 个号码。`);
+        drawBtn.disabled = false;
+      }
+
+      /** 渲染网格 **/
+      function renderGrid(){
+        gridEl.innerHTML = '';
+        const frag = document.createDocumentFragment();
+        for (const n of allNumbers){
+          const cell = document.createElement('div');
+          cell.className = 'cell' + (drawnSet.has(n) ? ' drawn' : '');
+          cell.dataset.num = n;
+          cell.textContent = n;
+          // 根据位数动态放大数字，确保更醒目且不溢出
+          const len = String(n).length;
+          let scale = 0.72; // 1位数更大
+          if (len === 2) scale = 0.62;
+          if (len >= 3) scale = 0.52;
+          cell.style.setProperty('--num-scale', scale);
+          frag.appendChild(cell);
+        }
+        gridEl.appendChild(frag);
+        fitCells();
+      }
+
+      /** 单屏自适应：计算合适的方块尺寸 **/
+      function fitCells(){
+        const n = allNumbers.length || 1;
+        const rect = gridEl.getBoundingClientRect();
+        const w = Math.max(200, rect.width - 12);
+        const h = Math.max(160, rect.height - 16);
+        const size = bestSquareSize(n, w, h, 8 /*gap*/);
+        document.documentElement.style.setProperty('--cell-size', size + 'px');
+      }
+
+      /** 依据可用宽高与数量，估算最大方块边长（考虑 gap） */
+      function bestSquareSize(n, w, h, gap){
+        let c = Math.ceil(Math.sqrt(n * (w / h)));
+        c = Math.max(1, c);
+        let s = Math.floor((w - (c - 1) * gap) / c);
+        let r = Math.ceil(n / c);
+        const totalH = r * s + (r - 1) * gap;
+        if (totalH > h) {
+          s = Math.floor((h - (r - 1) * gap) / r);
+        }
+        return Math.max(22, Math.min(s, 160));
+      }
+
+      /** 开始抽奖（闪烁 + 选定） **/
+      function startDraw(){
+        if (!allNumbers.length) { info('请先生成号码。'); return; }
+        const candidates = allNumbers.filter(n => !drawnSet.has(n));
+        if (candidates.length === 0) { info('所有号码都已抽过啦。'); return; }
+
+        drawBtn.disabled = true;
+        stopAnim();
+        currentWinner = null;
+
+        // 快速高亮随机游走
+        const cells = Array.from(gridEl.querySelectorAll('.cell'))
+          .filter(el => !drawnSet.has(parseInt(el.dataset.num, 10)));
+
+        const startTime = Date.now();
+        const runMs = 5000 + Math.floor(Math.random() * 1000); // 5.0s ~ 6.0s
+        const stepMs = 70; // 闪烁频率（更快一些，视觉更明显）
+
+        // 显示顶部轮播数字
+        rollerEl.classList.add('show');
+        rollerEl.textContent = '';
+
+        animTimer = setInterval(() => {
+          if (animActiveCell) animActiveCell.classList.remove('highlight');
+          const next = chooseRandom(cells);
+          animActiveCell = next;
+          if (next) next.classList.add('highlight');
+          if (next) rollerEl.textContent = next.dataset.num;
+
+          if (Date.now() - startTime >= runMs){
+            stopAnim();
+            if (animActiveCell) animActiveCell.classList.remove('highlight');
+            const winner = chooseRandom(candidates);
+            currentWinner = winner;
+            // 保持顶部显示最终号码，不自动消失
+            rollerEl.classList.add('show');
+            rollerEl.textContent = String(winner);
+            showWinnerOverlay(winner);
+          }
+        }, stepMs);
+      }
+
+      /** 停止闪烁 **/
+      function stopAnim(){
+        if (animTimer) { clearInterval(animTimer); animTimer = null; }
+        if (animActiveCell) { animActiveCell.classList.remove('highlight'); animActiveCell = null; }
+        if (rollerEl) { rollerEl.classList.remove('show'); rollerEl.textContent=''; }
+      }
+
+      /** 显示放大确认层 **/
+      function showWinnerOverlay(num){
+        dlgNumber.textContent = num;
+        overlay.classList.add('show');
+      }
+
+      /** 确认中奖：记录并置灰，不再参与下一次 **/
+      function confirmWinner(){
+        if (currentWinner == null) return;
+        drawnSet.add(currentWinner);
+        const cell = gridEl.querySelector(`.cell[data-num="${currentWinner}"]`);
+        if (cell) { cell.classList.remove('highlight'); cell.classList.add('drawn'); }
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.textContent = currentWinner;
+        winnersEl.appendChild(chip);
+
+        currentWinner = null;
+        overlay.classList.remove('show');
+
+        const left = allNumbers.length - drawnSet.size;
+        drawBtn.disabled = left <= 0;
+      }
+
+      /** 取消本次（不记录，仍可继续） **/
+      function cancelWinner(){
+        currentWinner = null;
+        overlay.classList.remove('show');
+        drawBtn.disabled = false;
+      }
+
+      /** 重置（保留当前范围，清除记录） **/
+      function resetAll(){
+        stopAnim();
+        drawnSet.clear();
+        winnersEl.innerHTML = '';
+        currentWinner = null;
+        renderGrid();
+        drawBtn.disabled = allNumbers.length === 0;
+      }
+
+      /** 顶部提示（轻量） **/
+      let hintTimer = null;
+      function info(msg){
+        clearTimeout(hintTimer);
+        const hint = document.querySelector('.hint');
+        hint.innerHTML = msg;
+        hint.style.color = '#c7d2fe';
+        hintTimer = setTimeout(() => { hint.style.color = getComputedStyle(document.documentElement).getPropertyValue('--muted'); }, 2000);
+      }
+
+      // 事件绑定
+      genBtn.addEventListener('click', generateNumbers);
+      drawBtn.addEventListener('click', startDraw);
+      resetBtn.addEventListener('click', resetAll);
+      confirmBtn.addEventListener('click', confirmWinner);
+      cancelBtn.addEventListener('click', cancelWinner);
+      window.addEventListener('resize', fitCells);
+
+      // 对测试暴露的最小 API（只读）
+      window.__lottery = {
+        buildRange,
+        bestSquareSize,
+        chooseRandom
+      };
+
+      // 初始渲染一份示例
+      generateNumbers();
+    })();
+  </script>
+
+  <!-- 轻量级内置测试（只在控制台输出，不影响 UI） -->
+  <script>
+    (function runTests(){
+      const results = [];
+      function assert(name, cond){
+        const ok = !!cond;
+        results.push({ name, ok });
+        if (!ok) console.error('[测试失败]', name);
+      }
+
+      try {
+        const API = window.__lottery || {};
+        // T1: buildRange 基本正确
+        const r = API.buildRange(1,5);
+        assert('buildRange(1,5) 长度为 5', r.length === 5);
+        assert('buildRange(1,5) 首尾正确', r[0] === 1 && r[4] === 5);
+
+        // T2: bestSquareSize 合理返回
+        const size = API.bestSquareSize(50, 800, 400, 8);
+        assert('bestSquareSize 返回正数', typeof size === 'number' && size > 0);
+        assert('bestSquareSize 不超过 160', size <= 160);
+
+        // T3: chooseRandom 必在输入集合内
+        const bag = [10,11,12];
+        let inSet = true;
+        for (let i=0;i<60;i++){ const x = API.chooseRandom(bag); if (!bag.includes(x)) { inSet = false; break; } }
+        assert('chooseRandom 输出在给定数组中', inSet);
+
+        $1
+
+        // T5: buildRange 边界 s=e
+        const r2 = API.buildRange(7,7);
+        assert('buildRange(7,7) 仅一个元素', r2.length === 1 && r2[0] === 7);
+
+        // T6: chooseRandom([]) -> undefined
+        assert('chooseRandom 空数组返回 undefined', API.chooseRandom([]) === undefined);
+      } catch (e) {
+        console.error('测试运行异常：', e);
+      } finally {
+        const pass = results.every(r=>r.ok);
+        const summary = `${results.filter(r=>r.ok).length}/${results.length} tests passed`;
+        (pass ? console.log : console.warn)('[内置测试]', summary, results);
+      }
+    })();
+  </script>
+</body>
+</html>
